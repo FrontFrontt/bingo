@@ -1,0 +1,15 @@
+// /backend/routes/roundRoutes.js (อัปเดต)
+const express = require('express');
+const { protect } = require('../middleware/authMiddleware');
+const { uploadProof } = require('../middleware/uploadMiddleware');
+const { listActiveRounds } = require('../controllers/roundController');
+const { submitDeposit } = require('../controllers/depositController');
+const router = express.Router();
+
+// U-01: GET /api/rounds/active
+router.get('/active', protect, listActiveRounds);
+
+// U-03: POST /api/rounds/deposit (รับไฟล์สลิป)
+router.post('/deposit', protect, uploadProof, submitDeposit); // <--- เพิ่ม Route นี้
+
+module.exports = router;
