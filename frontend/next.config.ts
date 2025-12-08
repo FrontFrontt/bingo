@@ -3,7 +3,7 @@ import type { NextConfig } from "next";
 
 const nextConfig: NextConfig = {
   experimental: {
-    appDir: false,   // ❗ บังคับปิด App Router
+    // appDir: false, // ลบคีย์นี้ออก หรือคอมเมนต์ // ใส่ experimental keys อื่นๆ
   },
 };
 
