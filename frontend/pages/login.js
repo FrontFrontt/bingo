@@ -160,7 +160,7 @@ const LoginPage = () => {
 
                 {/* Footer Text */}
                 <p className="text-center text-xs text-slate-400 font-light mt-6">
-                    ระบบบิงโกออนไลน์ © 2024
+                    ระบบบิงโกออนไลน์ © 2025
                 </p>
             </div>
         </div>
