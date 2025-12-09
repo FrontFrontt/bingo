@@ -4,7 +4,7 @@ import { useRouter } from 'next/router';
 import Link from 'next/link';
 import axios from 'axios';
 
-const API_URL = 'http://localhost:4000/api/auth/register';
+const API_URL = process.env.NEXT_PUBLIC_API_BASE_URL + "/auth/register";
 
 const RegisterPage = () => {
     const [formData, setFormData] = useState({

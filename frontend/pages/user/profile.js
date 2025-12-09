@@ -285,7 +285,7 @@ const UserProfilePage = () => {
 
                 {/* Quick Actions (Unchanged) */}
                 <div className="mt-6 grid grid-cols-2 gap-4">
-                    <Link href="/deposit">
+                    {/* <Link href="/deposit">
                         <div className="bg-white/60 backdrop-blur-sm p-4 rounded-2xl shadow-sm border border-sky-100 hover:shadow-md hover:border-sky-200 transition-all cursor-pointer">
                             <div className="flex items-center gap-3">
                                 <div className="w-10 h-10 bg-emerald-100 rounded-xl flex items-center justify-center">
@@ -297,7 +297,7 @@ const UserProfilePage = () => {
                                 </div>
                             </div>
                         </div>
-                    </Link>
+                    </Link> */}
 
                     <Link href="/">
                         <div className="bg-white/60 backdrop-blur-sm p-4 rounded-2xl shadow-sm border border-sky-100 hover:shadow-md hover:border-sky-200 transition-all cursor-pointer">

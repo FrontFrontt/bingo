@@ -4,6 +4,7 @@ import { useRouter } from 'next/router';
 import Link from 'next/link';
 import axios from 'axios';
 
+// 🚨 FIX: ใช้ Environment Variable
 const LOBBY_API_BASE = process.env.NEXT_PUBLIC_API_BASE_URL + '/users/rounds';
 
 const formatTime = (totalSeconds) => {
@@ -26,6 +27,7 @@ const GameLobbyPage = () => {
 
     const token = typeof window !== 'undefined' ? localStorage.getItem('bingoToken') : null;
 
+    // 🚨 useEffect ตัวที่ 1: Fetch ข้อมูลและตรวจสอบ Redirect
     useEffect(() => {
         if (!roundId || !token) return;
 
@@ -35,44 +37,63 @@ const GameLobbyPage = () => {
                     headers: { Authorization: `Bearer ${token}` }
                 });
                 const data = response.data;
+
+                // 🚨 FIX 1: ตรวจสอบ Card Numbers ทันที
+                const userCard = data.myCard;
+                if (!userCard || userCard.card_numbers === null || userCard.card_numbers === 'null' || userCard.card_numbers === '[]' || userCard.card_numbers.length === 0) {
+                    // ถ้ายังไม่ได้สร้างตาราง ให้ส่งไปหน้าสร้างตารางทันที
+                    router.push(`/round/${roundId}/card-setup`);
+                    return; 
+                }
+                
                 setLobbyData(data);
-                // Note: โค้ดนี้จะใช้ได้เฉพาะเมื่อ userController.js ถูกแก้ให้สร้าง Card_numbers เป็น JSON String 
-                // หรือในตอนแรกที่ลงทะเบียน Card Numbers ถูกสร้างขึ้นแล้ว (ตาม Logic เดิม)
-                setCardNumbers(JSON.parse(data.myCard.card_numbers));
+                // แปลง card_numbers จาก JSON String เป็น Array
+                const cardArray = JSON.parse(userCard.card_numbers || '[]');
+                setCardNumbers(cardArray);
 
-                // **แก้ไข: ใช้ play_time ในการคำนวณเวลานับถอยหลัง**
-                let gameStartTime = new Date(data.game.play_time); // <--- ใช้ play_time
-
-                // รองรับ MySQL DATETIME format (YYYY-MM-DD HH:MM:SS) 
+                // คำนวณเวลาที่เหลือ
+                let gameStartTime = new Date(data.game.play_time);
                 if (isNaN(gameStartTime.getTime()) && typeof data.game.play_time === 'string') {
                     gameStartTime = new Date(data.game.play_time.replace(' ', 'T'));
                 }
 
-                const gameStartTimeMs = gameStartTime.getTime();
                 const now = new Date().getTime();
-                const remaining = Math.max(0, Math.floor((gameStartTimeMs - now) / 1000));
+                const remaining = Math.max(0, Math.floor((gameStartTime.getTime() - now) / 1000));
+                
+                // 🚨 FIX 2: ถ้าถึงเวลาเล่นแล้ว (เวลาเหลือ 0) ให้ส่งไปหน้า Play ทันที
+                if (remaining <= 0) {
+                     router.push(`/round/${roundId}/play`); 
+                     return;
+                }
+                
                 setTimeRemaining(remaining);
+                setLoading(false);
 
             } catch (error) {
-                alert(error.response?.data?.message || 'ไม่สามารถโหลดข้อมูล Lobby ได้');
-                router.push('/');
-            } finally {
+                console.error('Error fetching lobby data:', error.response?.data?.message || error.message);
+                if (error.response?.status === 404) {
+                    alert('ไม่พบรอบเกมหรือคุณยังไม่ได้ลงทะเบียนสำหรับรอบนี้');
+                    router.push('/');
+                } else if (error.response?.status === 401 || error.response?.status === 403) {
+                     router.push('/login');
+                }
                 setLoading(false);
             }
         };
 
         fetchLobbyData();
-    }, [roundId]);
+    }, [roundId, token]);
 
+    // 🚨 useEffect ตัวที่ 2: Timer
     useEffect(() => {
-        if (timeRemaining <= 0) return;
+        if (timeRemaining <= 0 || loading) return;
 
         const timer = setInterval(() => {
             setTimeRemaining(prev => {
                 if (prev <= 1) {
                     clearInterval(timer);
-                    // 🎯 แก้ไข: เปลี่ยนไปที่หน้า card-setup แทน play
-                    router.push(`/round/${roundId}/card-setup`);
+                    // 🎯 แก้ไข: เปลี่ยนไปที่หน้า play เมื่อเวลาหมดลง
+                    router.push(`/round/${roundId}/play`);
                     return 0;
                 }
                 return prev - 1;
@@ -80,170 +101,73 @@ const GameLobbyPage = () => {
         }, 1000);
 
         return () => clearInterval(timer);
-    }, [timeRemaining]);
+    }, [timeRemaining, loading]); 
 
-    if (loading || !lobbyData) {
+    if (loading) {
         return (
-            <div className="min-h-screen flex items-center justify-center bg-gradient-to-br from-blue-50 via-sky-50 to-cyan-50">
-                <div className="text-center">
-                    <div className="w-16 h-16 border-4 border-sky-200 border-t-sky-500 rounded-full animate-spin mx-auto mb-4"></div>
-                    <p className="text-slate-600 font-light text-lg">กำลังโหลด Game Lobby...</p>
-                </div>
+            <div className="min-h-screen flex items-center justify-center bg-gradient-to-br from-sky-50 to-indigo-50">
+                <p className="text-slate-600 font-light">กำลังโหลดห้อง Lobby...</p>
+            </div>
+        );
+    }
+    
+    if (timeRemaining <= 0) {
+        return (
+            <div className="min-h-screen flex items-center justify-center bg-gradient-to-br from-sky-50 to-indigo-50">
+                <p className="text-slate-600 font-light">กำลังนำเข้าสู่ห้องเล่น...</p>
             </div>
         );
     }
 
+    const time = formatTime(timeRemaining);
     const isGameStarted = timeRemaining <= 0;
-    const { days, hours, minutes, seconds } = formatTime(timeRemaining);
 
     return (
-        <div className="min-h-screen bg-gradient-to-br from-blue-50 via-sky-50 to-cyan-50 p-6 md:p-12">
-            <div className="max-w-5xl mx-auto">
-
-                {/* Header */}
-                <div className="mb-8">
-                    <Link href="/"
-                        className="inline-flex items-center gap-2 text-sm text-sky-600 hover:text-sky-700 font-light mb-4 transition-colors">
-                        <span>←</span>
-                        <span>กลับหน้าหลัก</span>
-                    </Link>
-                    <div className="flex items-center gap-3 mb-2">
-                        <h1 className="text-3xl font-light text-slate-700">
-                            {lobbyData?.game?.title || 'Game Lobby'}
-                        </h1>
-                        <span className="px-3 py-1 bg-emerald-100 text-emerald-600 rounded-full text-xs font-light">
-                            {isGameStarted ? '🎮 เริ่มแล้ว' : '⏳ รอเริ่ม'}
-                        </span>
-                    </div>
-                    <p className="text-slate-400 font-light text-sm">รอบที่ #{roundId}</p>
-                </div>
+        <div className="min-h-screen bg-gradient-to-br from-sky-50 to-indigo-50 p-6 md:p-12">
+            <div className="max-w-3xl mx-auto">
+                <h1 className="text-3xl font-light text-slate-700 mb-2 text-center">ห้องรอเกม (Lobby)</h1>
+                <p className="text-sm text-slate-500 font-light mb-8 text-center">
+                    รอบเกม ID: {roundId} - เตรียมตัวให้พร้อม!
+                </p>
 
                 {/* Countdown Timer */}
-                <div className="bg-white/70 backdrop-blur-xl shadow-xl rounded-3xl p-12 border border-sky-100 mb-8">
-                    {isGameStarted ? (
-                        <div className="text-center">
-                            <div className="text-7xl mb-4 animate-bounce">🎉</div>
-                            <p className="text-3xl font-light text-emerald-600 mb-2">เกมเริ่มแล้ว!</p>
-                            <p className="text-slate-400 font-light">กดปุ่มด้านล่างเพื่อเข้าเล่น</p>
-                        </div>
-                    ) : (
-                        <div className="text-center">
-                            <p className="text-sm text-slate-400 font-light uppercase tracking-wider mb-6">
-                                เกมจะเริ่มต้นใน
-                            </p>
-
-                            {/* Countdown Display */}
-                            <div className="flex justify-center items-center gap-3 md:gap-6">
-                                {days > 0 && (
-                                    <>
-                                        <TimeSegment value={days} label="วัน" />
-                                        <span className="text-3xl text-slate-300 font-light">:</span>
-                                    </>
-                                )}
-                                <TimeSegment value={hours} label="ชั่วโมง" />
-                                <span className="text-3xl text-slate-300 font-light">:</span>
-                                <TimeSegment value={minutes} label="นาที" />
-                                <span className="text-3xl text-slate-300 font-light">:</span>
-                                <TimeSegment value={seconds} label="วินาที" />
-                            </div>
-
-                            <p className="text-slate-400 font-light text-sm mt-6">
-                                เตรียมตัวให้พร้อม...
-                            </p>
-                        </div>
-                    )}
-                </div>
-
-                <div className="grid grid-cols-1 lg:grid-cols-2 gap-6 mb-8">
-                    {/* Players List */}
-                    <div className="bg-white/70 backdrop-blur-xl shadow-xl rounded-3xl p-8 border border-sky-100">
-                        <div className="flex items-center justify-between mb-6">
-                            <h2 className="text-xl font-light text-slate-700">ผู้เข้าร่วม</h2>
-                            <div className="px-4 py-2 bg-sky-50 rounded-full">
-                                <span className="text-sm font-light text-sky-600">
-                                    {lobbyData.players.length} คน
-                                </span>
-                            </div>
-                        </div>
-
-                        <div className="space-y-2 max-h-96 overflow-y-auto pr-2 scrollbar-thin">
-                            {lobbyData.players.map((player, index) => (
-                                <div
-                                    key={player.card_id}
-                                    className="flex items-center gap-3 p-3 rounded-xl bg-sky-50/50 hover:bg-sky-100/50 transition-colors"
-                                >
-                                    <div className="w-8 h-8 bg-gradient-to-br from-sky-400 to-cyan-400 rounded-full flex items-center justify-center flex-shrink-0">
-                                        <span className="text-white text-xs font-light">{index + 1}</span>
-                                    </div>
-                                    <span className="text-sm font-light text-slate-700">{player.username}</span>
-                                </div>
-                            ))}
-                        </div>
-                        {lobbyData.players.length === 0 && (
-                            <div className="text-center py-8">
-                                <div className="text-5xl mb-3">👥</div>
-                                <p className="text-slate-400 font-light text-sm">ยังไม่มีผู้เล่นคนอื่น</p>
-                            </div>
-                        )}
+                <div className="bg-white/70 backdrop-blur-sm rounded-2xl shadow-xl border border-rose-200 p-8 mb-8 text-center">
+                    <p className="text-lg text-rose-600 font-light mb-4">เกมจะเริ่มใน:</p>
+                    <div className="flex justify-center gap-4">
+                        <TimeSegment value={time.days} label="วัน" />
+                        <TimeSegment value={time.hours} label="ชม." />
+                        <TimeSegment value={time.minutes} label="นาที" />
+                        <TimeSegment value={time.seconds} label="วินาที" />
                     </div>
                 </div>
 
-                {/* Game Info */}
-                <div className="grid grid-cols-1 md:grid-cols-3 gap-4 mb-8">
-                    <div className="bg-white/60 backdrop-blur-sm p-6 rounded-2xl shadow-sm border border-emerald-100">
-                        <div className="flex items-center gap-3">
-                            <div className="w-12 h-12 bg-emerald-100 rounded-xl flex items-center justify-center">
-                                <span className="text-2xl">💎</span>
+                {/* My Card Preview */}
+                <div className="bg-white/70 backdrop-blur-sm rounded-2xl shadow-md border border-sky-100 p-6 mb-8">
+                    <h3 className="text-xl font-light text-slate-700 mb-3">ตารางบิงโกของคุณ</h3>
+                    <div className="grid grid-cols-5 gap-1 border-2 border-indigo-500 p-2 rounded-lg max-w-xs mx-auto">
+                        {cardNumbers.map((num, index) => (
+                            <div
+                                key={index}
+                                className={`w-full aspect-square flex items-center justify-center rounded text-sm font-semibold ${
+                                    num === 'FREE' ? 'bg-indigo-500 text-white' : 'bg-gray-100 text-gray-800'
+                                }`}
+                            >
+                                {num}
                             </div>
-                            <div>
-                                <p className="text-xs text-slate-400 font-light uppercase tracking-wider mb-1">เงินรางวัล</p>
-                                <p className="text-xl font-light text-emerald-600">
-                                    {lobbyData.game.prize_amount?.toLocaleString()} ฿
-                                </p>
-                            </div>
-                        </div>
+                        ))}
                     </div>
-
-                    <div className="bg-white/60 backdrop-blur-sm p-6 rounded-2xl shadow-sm border border-sky-100">
-                        <div className="flex items-center gap-3">
-                            <div className="w-12 h-12 bg-sky-100 rounded-xl flex items-center justify-center">
-                                <span className="text-2xl">🎟️</span>
-                            </div>
-                            <div>
-                                <p className="text-xs text-slate-400 font-light uppercase tracking-wider mb-1">ราคาตั๋ว</p>
-                                <p className="text-xl font-light text-sky-600">
-                                    {lobbyData.game.ticket_price?.toLocaleString()} ฿
-                                </p>
-                            </div>
-                        </div>
-                    </div>
-
-                    <div className="bg-white/60 backdrop-blur-sm p-6 rounded-2xl shadow-sm border border-amber-100">
-                        <div className="flex items-center gap-3">
-                            <div className="w-12 h-12 bg-amber-100 rounded-xl flex items-center justify-center">
-                                <span className="text-2xl">🎮</span>
-                            </div>
-                            <div>
-                                <p className="text-xs text-slate-400 font-light uppercase tracking-wider mb-1">สถานะ</p>
-                                <p className="text-lg font-light text-amber-600">
-                                    {isGameStarted ? 'พร้อมเล่น' : 'กำลังรอ'}
-                                </p>
-                            </div>
-                        </div>
-                    </div>
+                    <p className="text-center text-xs text-slate-500 mt-4">
+                        คุณสร้างตารางเรียบร้อยแล้ว หากต้องการแก้ไข <Link href={`/round/${roundId}/card-setup`} className="text-sky-600 underline">คลิกที่นี่</Link> (ก่อนเวลาเริ่ม)
+                    </p>
                 </div>
 
-                {/* Play Button */}
+                {/* Action Button (ไม่จำเป็นต้องมี เพราะ Timer จะ Redirect เอง) */}
                 <button
-                    // *** Path สำหรับปุ่มนี้ก็ควรเปลี่ยนไปที่ card-setup ด้วย ***
+                    onClick={() => router.push(`/round/${roundId}/play`)}
                     disabled={!isGameStarted}
-                    onClick={() => router.push(`/round/${roundId}/card-setup`)} // *** New Path ***
-                    className={`w-full py-4 rounded-2xl font-light text-lg transition-all ${isGameStarted
-                        ? 'bg-gradient-to-r from-emerald-500 to-green-500 hover:from-emerald-600 hover:to-green-600 text-white shadow-lg hover:shadow-xl active:scale-[0.98]'
-                        : 'bg-slate-200 text-slate-400 cursor-not-allowed'
-                        }`}
+                    className={`w-full py-3 rounded-xl font-light transition-all ${!isGameStarted ? 'bg-gray-400 text-gray-600 cursor-not-allowed' : 'bg-indigo-600 text-white hover:bg-indigo-700'}`}
                 >
-                    {isGameStarted ? '🎮 เข้าสู่ห้องเล่นบิงโก! (สร้างตาราง)' : '⏳ รอเวลาเริ่มเกม...'}
+                    {isGameStarted ? '🎮 เข้าสู่ห้องเล่นบิงโก!' : '⏳ รอเวลาเริ่มเกม...'}
                 </button>
 
                 {/* Tip */}
@@ -271,7 +195,7 @@ const TimeSegment = ({ value, label }) => (
                 </p>
             </div>
         </div>
-        <p className="text-xs font-light text-slate-400 mt-2 uppercase tracking-wider">{label}</p>
+        <p className="text-sm text-slate-600 mt-1 font-light">{label}</p>
     </div>
 );
 

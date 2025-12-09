@@ -93,6 +93,25 @@ exports.registerForRound = async (req, res) => {
             return res.json({ message: 'คุณลงทะเบียนรอบนี้แล้ว', card_id: existingCard[0].card_id });
         }
 
+        // 🚨 NEW LOGIC: ตรวจสอบธุรกรรมที่รอดำเนินการ (Deposit ที่ผูกกับ Round นี้)
+        const pendingDepositQuery = `
+            SELECT transaction_id 
+            FROM Transactions
+            WHERE user_id = ? 
+            AND round_id = ? 
+            AND status = 'pending' 
+            AND transaction_type = 'deposit'
+        `;
+        const [pendingTransactions] = await connection.execute(pendingDepositQuery, [user_id, round_id]);
+        
+        if (pendingTransactions.length > 0) {
+            await connection.rollback();
+            // ส่งข้อความเฉพาะกลับไปให้ Frontend ทราบสถานะ
+            return res.status(400).json({ 
+                message: `คุณได้ยื่นคำขอเติมเงินเพื่อซื้อตั๋วรอบนี้แล้ว กรุณารอ Admin อนุมัติ` 
+            });
+        }
+
         // 2. ดึงข้อมูลรอบเกมและยอดเงินผู้ใช้
         const [roundRows] = await connection.execute("SELECT title, ticket_price FROM gameround WHERE round_id = ?", [round_id]);
         const [userRows] = await connection.execute("SELECT wallet_balance FROM Users WHERE user_id = ?", [user_id]);

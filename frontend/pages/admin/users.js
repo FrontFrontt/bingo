@@ -4,7 +4,7 @@ import Link from 'next/link';
 import { useRouter } from 'next/router';
 import axios from 'axios';
 
-const ADMIN_API_BASE = 'http://localhost:4000/api/admin';
+const ADMIN_API_BASE = process.env.NEXT_PUBLIC_API_BASE_URL + "/admin";
 
 const AdminUsersPage = () => {
     const [users, setUsers] = useState([]);

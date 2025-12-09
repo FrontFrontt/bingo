@@ -4,7 +4,7 @@ import { useRouter } from "next/router";
 import axios from "axios";
 import Link from "next/link";
 
-const API_URL = "http://localhost:4000/api/auth";
+const API_URL = process.env.NEXT_PUBLIC_API_BASE_URL + '/auth';
 
 const LoginPage = () => {
     const [username, setUsername] = useState("");

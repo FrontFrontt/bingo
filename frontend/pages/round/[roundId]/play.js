@@ -3,7 +3,7 @@ import React, { useState, useEffect, useCallback } from 'react';
 import { useRouter } from 'next/router';
 import axios from 'axios';
 
-// API สำหรับดึงข้อมูล Lobby (ใช้เพื่อดึง Card Numbers ที่บันทึกแล้ว)
+// 🚨 FIX: ใช้ Environment Variable
 const LOBBY_API_BASE = process.env.NEXT_PUBLIC_API_BASE_URL + '/users/rounds';
 const GAME_STATE_API = process.env.NEXT_PUBLIC_API_BASE_URL + '/users/rounds';
 const CLAIM_WIN_API = process.env.NEXT_PUBLIC_API_BASE_URL + '/users/claim-win';
@@ -18,320 +18,382 @@ const checkBingo = (markedCells) => {
         [0, 1, 2, 3, 4], [5, 6, 7, 8, 9], [10, 11, 12, 13, 14], [15, 16, 17, 18, 19], [20, 21, 22, 23, 24],
         // Columns
         [0, 5, 10, 15, 20], [1, 6, 11, 16, 21], [2, 7, 12, 17, 22], [3, 8, 13, 18, 23], [4, 9, 14, 19, 24],
-        // Diagonals (ช่องกลาง Index 12 เป็น FREE)
+        // Diagonals
         [0, 6, 12, 18, 24], [4, 8, 12, 16, 20]
     ];
 
-    // ตรวจสอบ Bingo
-    return winningLines.some(line => {
-        // ถ้าเป็นแนวทแยงที่ผ่านช่อง FREE (Index 12) หรือเป็นแนวอื่น
-        if (line.includes(12)) {
-            // นับว่าช่อง FREE ถูกทำเครื่องหมายอยู่เสมอ (ซึ่งถูกตั้งค่าไว้ที่ index 12 = true ใน state)
-            const markedCount = line.filter(index => markedCells[index]).length;
-            return markedCount >= 5; 
+    for (const line of winningLines) {
+        if (line.every(index => markedCells.has(index))) {
+            return true;
         }
-        return line.every(index => markedCells[index]);
-    });
+    }
+    return false;
 };
 
+
+// Main Game Component
 const GamePlayPage = () => {
     const router = useRouter();
     const { roundId } = router.query;
-    const token = typeof window !== 'undefined' ? localStorage.getItem('bingoToken') : null;
-
-    const [myCard, setMyCard] = useState(null); 
-    const [roundInfo, setRoundInfo] = useState(null);
-    const [gameState, setGameState] = useState('LOADING'); // LOADING, PLAYING
-    const [calledNumbers, setCalledNumbers] = useState([]); 
-    const [markedCells, setMarkedCells] = useState(Array(TOTAL_CELLS).fill(false)); 
-    const [winStatus, setWinStatus] = useState(null); // WIN, LOSS
     
-    // NEW STATE: สถานะผู้เล่นคนอื่น
-    const [otherPlayers, setOtherPlayers] = useState([]); 
-    const [isBingoClaimed, setIsBingoClaimed] = useState(false); // ล็อคการตรวจสอบบิงโกหลังชนะ/คนอื่นชนะ
+    // States
+    const [gameState, setGameState] = useState('LOADING'); // 'LOADING', 'PLAYING', 'END_WIN', 'END_LOSE'
+    const [roundInfo, setRoundInfo] = useState(null);
+    const [myCard, setMyCard] = useState([]); // Array of strings/numbers
+    const [calledNumbers, setCalledNumbers] = useState([]); // Array of strings/numbers
+    const [markedCells, setMarkedCells] = useState(new Set()); // Set of indexes (0-24)
+    const [isBingoClaimed, setIsBingoClaimed] = useState(false);
+    const [winAmount, setWinAmount] = useState(0);
+    const [error, setError] = useState('');
 
+    const token = typeof window !== 'undefined' ? localStorage.getItem('bingoToken') : null;
+    const isGameActive = gameState === 'PLAYING';
 
-    // ** 1. ฟังก์ชันดึงสถานะเกมที่แชร์ (Polling) **
-    const fetchGameState = useCallback(async () => {
-        if (!roundId || !token) return;
+    // Helper: Mark Cell on client side
+    const toggleCell = useCallback((index) => {
+        if (!isGameActive || isBingoClaimed) return;
 
-        try {
-            const response = await axios.get(`${GAME_STATE_API}/${roundId}/game-state`, {
-                headers: { Authorization: `Bearer ${token}` }
-            });
-            const data = response.data;
+        const numberOnCard = myCard[index];
+        const isCalled = calledNumbers.includes(numberOnCard);
 
-            // 1. อัปเดตตัวเลขที่ถูกเรียก
-            setCalledNumbers(data.calledNumbers || []);
-
-            // 2. อัปเดตสถานะผู้เล่นคนอื่น (เพื่อแสดงผล)
-            setOtherPlayers(data.players || []);
-
-            // 3. ตรวจสอบผู้ชนะ (ถ้ามีใครบิงโกแล้ว)
-            // Note: data.winnerId ควรเป็น user_id ของผู้ชนะ
-            if (data.winnerId && data.winnerId !== router.query.userId) { 
-                 setIsBingoClaimed(true); // มีคนชนะแล้ว
-                 setWinStatus('LOSS'); // ถ้าไม่ใช่เราที่ชนะ ให้แสดงหน้าจอแพ้
+        if (isCalled || numberOnCard === 'FREE') {
+            const newMarkedCells = new Set(markedCells);
+            // ถ้าเป็นเบอร์ที่ถูกเรียก หรือเป็นช่อง FREE ให้ทำการ Mark/Unmark
+            if (newMarkedCells.has(index)) {
+                newMarkedCells.delete(index);
+            } else {
+                newMarkedCells.add(index);
             }
-            
-            // 4. Marking Card (ทำเครื่องหมายตาม calledNumbers ที่ได้มา)
-            if (myCard) {
-                setMarkedCells(prevMarked => {
-                    // ช่อง Free (Index 12) ควรถูก Mark เป็น True เสมอ
-                    const newMarked = [...prevMarked];
-                    newMarked[12] = true; 
-                    let needsUpdate = false;
+            setMarkedCells(newMarkedCells);
+            setError(''); // Clear error if user attempts to mark
+        } else {
+             setError(`หมายเลข ${numberOnCard} ยังไม่ถูกเรียก!`);
+             // Animation effect for error
+             const element = document.getElementById(`cell-${index}`);
+             if (element) {
+                 element.classList.add('animate-shake');
+                 setTimeout(() => element.classList.remove('animate-shake'), 400);
+             }
+        }
+    }, [isGameActive, isBingoClaimed, myCard, calledNumbers, markedCells]);
 
-                    myCard.forEach((cardNum, index) => {
-                        // Mark เฉพาะช่องที่ไม่ใช่ FREE และตรงกับ calledNumbers
-                        if (cardNum !== 'FREE' && cardNum !== null && data.calledNumbers.includes(cardNum) && !newMarked[index]) {
-                            newMarked[index] = true;
-                            needsUpdate = true;
+
+    // Helper: Check for Bingo and Claim
+    const handleClaimBingo = async () => {
+        if (isBingoClaimed || !isGameActive) return;
+
+        // 1. ตรวจสอบ Bingo ใน Frontend
+        const hasBingo = checkBingo(markedCells);
+
+        if (!hasBingo) {
+             setError('คุณยังไม่บิงโก! โปรดตรวจสอบตารางของคุณ');
+             return;
+        }
+
+        // 2. Claim Bingo
+        try {
+            const response = await axios.post(
+                CLAIM_WIN_API, 
+                { roundId }, 
+                { headers: { Authorization: `Bearer ${token}` } }
+            );
+            
+            setWinAmount(response.data.winAmount || roundInfo.prize_amount || 0);
+            setIsBingoClaimed(true);
+            setGameState('END_WIN'); // เปลี่ยนสถานะเกมเป็นชนะ
+            alert('🎉 ยินดีด้วย! คุณบิงโกแล้ว! กำลังรอการยืนยันจากระบบ');
+            
+        } catch (err) {
+            setError(err.response?.data?.message || 'เกิดข้อผิดพลาดในการยืนยันบิงโก');
+            alert(`ไม่สามารถ Claim Bingo ได้: ${err.response?.data?.message || 'เกิดข้อผิดพลาด'}`);
+        }
+    };
+    
+    // Helper: Mark initial cells based on called numbers
+    const initialMarked = useCallback((card, called) => {
+        const initialMarked = new Set();
+        card.forEach((num, index) => {
+            if (num === 'FREE') {
+                initialMarked.add(index);
+            } else if (called.includes(num)) {
+                initialMarked.add(index);
+            }
+        });
+        return initialMarked;
+    }, []);
+
+    // 🚨 useEffect ตัวที่ 1: Polling Game State
+    useEffect(() => {
+        if (gameState !== 'PLAYING' || !roundId) return;
+
+        const fetchGameState = async () => {
+            try {
+                const response = await axios.get(`${GAME_STATE_API}/${roundId}/game-state`, {
+                    headers: { Authorization: `Bearer ${token}` }
+                });
+                const data = response.data;
+
+                // อัปเดตตัวเลขที่ถูกเรียก
+                setCalledNumbers(data.calledNumbers);
+
+                // หากพบผู้ชนะคนแรก
+                if (data.isGameEnded) {
+                    // ตรวจสอบว่าผู้เล่นคนนี้ชนะหรือไม่
+                    if (data.isWinner) {
+                        setWinAmount(data.winAmount);
+                        setGameState('END_WIN');
+                    } else {
+                        setGameState('END_LOSE');
+                    }
+                    return;
+                }
+
+                // อัปเดต Marked Cells ตามเลขที่ถูกเรียกใหม่
+                setMarkedCells(prevMarked => {
+                    const newMarked = new Set(prevMarked);
+                    myCard.forEach((num, index) => {
+                        if (num !== 'FREE' && !newMarked.has(index) && data.calledNumbers.includes(num)) {
+                            newMarked.add(index);
                         }
                     });
-                    
-                    if (needsUpdate) {
-                        return newMarked;
-                    }
-                    return prevMarked;
+                    return newMarked;
                 });
+                
+
+            } catch (error) {
+                console.error('Error fetching game state:', error.message);
+                // ถ้าเกิด error 404/403 ให้แจ้งเตือนและกลับหน้าหลัก
+                if (error.response?.status === 404 || error.response?.status === 403) {
+                    alert('เกมจบลงแล้ว หรือเกิดข้อผิดพลาดในการเชื่อมต่อ');
+                    router.push('/');
+                }
             }
+        };
 
-        } catch (error) {
-            console.error("Error fetching game state:", error);
-        }
-    }, [roundId, token, myCard]);
+        // เริ่ม Polling
+        const interval = setInterval(fetchGameState, POLLING_INTERVAL);
+        return () => clearInterval(interval); // Cleanup function
+    }, [gameState, roundId, myCard]); // Dependency: myCard เพื่อให้ initialMarked ทำงานถูกต้อง
 
-
-    // ** 2. ดึง Card ที่บันทึกไว้ (Initial Setup) **
+    
+    // 🚨 useEffect ตัวที่ 2: Initial Setup และ Flow Check
     useEffect(() => {
         if (!roundId || !token || gameState !== 'LOADING') return;
 
         const fetchInitialData = async () => {
             try {
+                // 1. ดึงข้อมูล Lobby เพื่อตรวจสอบ Card Numbers และ Play Time
                 const response = await axios.get(`${LOBBY_API_BASE}/${roundId}/lobby`, {
                     headers: { Authorization: `Bearer ${token}` }
                 });
                 const data = response.data;
                 
-                if (!data.myCard || !data.myCard.card_numbers) { 
+                // 1.1. ตรวจสอบ Card Numbers
+                if (!data.myCard || !data.myCard.card_numbers || data.myCard.card_numbers === 'null' || data.myCard.card_numbers === '[]' || data.myCard.card_numbers.length === 0) { 
                     alert('กรุณาสร้างตารางบิงโกก่อนเข้าเล่น!');
                     router.push(`/round/${roundId}/card-setup`);
                     return;
                 }
                 
-                // แปลงค่า Card ที่บันทึกไว้
-                const parsedCard = JSON.parse(data.myCard.card_numbers).map(v => v === null ? '' : v); 
-                setMyCard(parsedCard);
+                // แปลง Card Numbers
+                const cardArray = JSON.parse(data.myCard.card_numbers || '[]');
+                setMyCard(cardArray);
                 setRoundInfo(data.game);
                 
-                // ตรวจสอบว่าถึงเวลาเล่นแล้วหรือไม่
-                const gameStartTime = new Date(data.game.play_time).getTime();
+                // 1.2. ตรวจสอบว่าถึงเวลาเล่นแล้วหรือไม่ (Flow Check)
+                let gameStartTime = new Date(data.game.play_time);
+                if (isNaN(gameStartTime.getTime()) && typeof data.game.play_time === 'string') {
+                    gameStartTime = new Date(data.game.play_time.replace(' ', 'T'));
+                }
+                
+                const gameStartTimeMs = gameStartTime.getTime();
                 const now = new Date().getTime();
 
-                if (now < gameStartTime) {
-                     // หากยังไม่ถึงเวลาเล่น ให้ redirect ไป Lobby ก่อน 
+                if (now < gameStartTimeMs) {
+                     // 🚨 FIX: หากยังไม่ถึงเวลาเล่น ให้ redirect กลับไป Lobby ก่อน 
                      router.push(`/round/${roundId}/lobby`);
                      return;
                 }
 
-                setGameState('PLAYING'); 
-                // ตั้งค่า markedCells เริ่มต้นโดยให้ช่อง FREE (Index 12) เป็น true
-                const initialMarked = Array(TOTAL_CELLS).fill(false);
-                initialMarked[12] = true; 
-                setMarkedCells(initialMarked);
+                // 2. ดึงสถานะเกมเริ่มต้น (เลขที่ถูกเรียกแล้ว)
+                const gameStateResponse = await axios.get(`${GAME_STATE_API}/${roundId}/game-state`, {
+                    headers: { Authorization: `Bearer ${token}` }
+                });
                 
-                // ดึงสถานะเกมครั้งแรก
-                await fetchGameState(); 
+                const initialCalledNumbers = gameStateResponse.data.calledNumbers;
+                setCalledNumbers(initialCalledNumbers);
+                
+                // 3. Mark cells ที่ถูกเรียกไปแล้วตั้งแต่เริ่มต้น
+                setMarkedCells(initialMarked(cardArray, initialCalledNumbers));
+                
+                setGameState('PLAYING');
 
             } catch (error) {
-                console.error("Error fetching card in play page:", error);
-                alert('ไม่สามารถโหลดข้อมูลตารางบิงโกได้');
-                router.push(`/`);
-            } finally {
-                setGameState(prev => prev === 'LOADING' ? 'PLAYING' : prev);
-            }
+                console.error('Error fetching initial data for play:', error.message);
+                setError(error.response?.data?.message || 'ไม่สามารถโหลดข้อมูลเกมได้');
+                // หากดึงข้อมูลไม่ได้ ให้กลับหน้าหลัก
+                alert('ไม่สามารถเริ่มเกมได้ กรุณาตรวจสอบการลงทะเบียน');
+                router.push('/');
+            } 
         };
         fetchInitialData();
     }, [roundId, gameState]);
 
-    // ** 3. Polling Effect (ดึงสถานะเกมซ้ำๆ) **
-    useEffect(() => {
-        // ไม่ต้อง Polling ถ้ายังไม่ถึงสถานะ PLAYING, หรือถ้ามีคนเคลมบิงโกไปแล้ว, หรือยังไม่มี Card
-        if (gameState !== 'PLAYING' || isBingoClaimed || !myCard) return;
 
-        const intervalId = setInterval(fetchGameState, POLLING_INTERVAL);
+    // Render Helpers
+    const isNumberCalled = (number) => calledNumbers.includes(number);
+    const getCellClass = (index, number) => {
+        let classes = 'w-full aspect-square flex items-center justify-center border-2 rounded-lg text-lg font-semibold transition-all duration-100 ease-in-out cursor-pointer relative';
+        
+        const isMarked = markedCells.has(index);
+        const isCalled = isNumberCalled(number);
+        const isFree = number === 'FREE';
 
-        return () => clearInterval(intervalId);
-    }, [gameState, isBingoClaimed, fetchGameState, myCard]);
-
-
-    // ** 4. Logic ตรวจสอบ Bingo ทุกครั้งที่ markedCells เปลี่ยน **
-    useEffect(() => {
-        // isBingoClaimed เพื่อป้องกันการเรียกซ้ำ, winStatus === 'WIN' ป้องกันการวนซ้ำหลังจากชนะ
-        if (!myCard || isBingoClaimed || winStatus === 'WIN') return; 
-
-        if (checkBingo(markedCells)) {
-            setWinStatus('WIN');
-            setIsBingoClaimed(true); // ล็อคการเคลม
+        if (isFree) {
+            classes += ' bg-indigo-500 text-white shadow-inner cursor-not-allowed';
+        } else if (isMarked && isCalled) {
+            // Marked correctly
+            classes += ' bg-emerald-500 text-white border-emerald-600 shadow-md ring-2 ring-emerald-300';
+        } else if (isCalled) {
+            // Called but not marked
+            classes += ' bg-yellow-200 text-gray-800 border-yellow-400 hover:bg-yellow-300';
+        } else {
+            // Not called
+            classes += ' bg-white text-gray-800 border-gray-200 hover:bg-gray-100';
         }
-    }, [markedCells, isBingoClaimed, myCard, winStatus]);
 
-
-    // Logic การแสดงผล (Win/Loss)
-    const handleWinScreenConfirm = () => {
-        // หลังจบการเคลมหรือเกมจบ ให้กลับหน้าหลัก
-        router.push('/');
+        return classes;
     };
 
-    if (winStatus) {
+
+    if (gameState === 'LOADING') {
         return (
-            <WinLossScreen 
-                status={winStatus} 
-                roundId={roundId} 
-                winAmount={roundInfo?.prize_amount || 0} 
-                onConfirm={handleWinScreenConfirm} 
-            />
+            <div className="min-h-screen flex items-center justify-center bg-gradient-to-br from-indigo-50 to-sky-50">
+                <p className="text-slate-600 font-light">กำลังเตรียมห้องเล่นบิงโก...</p>
+            </div>
         );
     }
     
-    // ... (Loading/Setup State) ...
-    if (gameState === 'LOADING' || !myCard) {
-        return <div className="p-4 text-center">กำลังเตรียมข้อมูลเกม...</div>;
+    // Show End Game Modal
+    if (gameState === 'END_WIN' || gameState === 'END_LOSE') {
+        return <EndGameModal status={gameState === 'END_WIN' ? 'WIN' : 'LOSE'} winAmount={winAmount} onConfirm={() => router.push('/')} />;
     }
+    
 
     return (
-        <div className="p-4 max-w-6xl mx-auto">
-            <h1 className="text-3xl font-bold mb-6 text-center text-slate-700">
-                รอบเกม: {roundInfo?.title || `ID ${roundId}`}
-            </h1>
+        <div className="min-h-screen bg-gradient-to-br from-indigo-50 to-sky-50 p-6 md:p-12">
+            <div className="max-w-4xl mx-auto">
+                <header className="bg-white/60 backdrop-blur-sm rounded-2xl shadow-lg border border-sky-100 p-4 mb-6">
+                    <h1 className="text-2xl font-light text-slate-700">รอบเกม: {roundInfo?.title || 'กำลังเล่น'}</h1>
+                    <p className="text-sm text-slate-500">เกมกำลังดำเนิน... (ตัวเลขล่าสุด: {calledNumbers[calledNumbers.length - 1] || '-'})</p>
+                </header>
 
-            <div className="grid grid-cols-1 lg:grid-cols-3 gap-6">
-                
-                {/* COLUMN 1: Called Numbers & Other Players */}
-                <div className="lg:col-span-1 space-y-6 order-2 lg:order-1">
-                    {/* Called Number Display (Updated) */}
-                    <div className="bg-white/70 backdrop-blur-sm p-6 rounded-2xl shadow-md border border-sky-100 text-center">
-                        <p className="text-sm text-slate-500 mb-2">ตัวเลขล่าสุดที่ถูกเรียก:</p>
-                        <div className="w-24 h-24 bg-rose-500 rounded-full flex items-center justify-center mx-auto animate-pulse">
-                            <span className="text-4xl font-extrabold text-white">
-                                {calledNumbers[calledNumbers.length - 1] || 'รอ...'}
-                            </span>
-                        </div>
-                    </div>
-
-                    {/* Other Players List */}
-                    <div className="bg-white/70 backdrop-blur-sm p-6 rounded-2xl shadow-md border border-sky-100">
-                        <h3 className="text-xl font-light text-slate-700 mb-4">ผู้เข้าเล่น ({otherPlayers.length})</h3>
-                        <div className="space-y-2 max-h-48 overflow-y-auto">
-                            {otherPlayers.map((player, index) => (
-                                <div 
-                                    key={index} 
-                                    // ไฮไลท์ผู้เล่นที่เคลมบิงโกแล้ว
-                                    className={`flex items-center p-2 rounded-lg ${
-                                        (player.isWinner || player.isBingoClaimed) 
-                                            ? 'bg-yellow-100 border border-yellow-400' 
-                                            : 'bg-slate-50'
-                                    }`}
-                                >
-                                    <span className={`text-sm font-light ${
-                                        (player.isWinner || player.isBingoClaimed) 
-                                            ? 'text-yellow-800 font-semibold' 
-                                            : 'text-slate-700'
-                                    }`}>
-                                        {player.username} 
-                                        {(player.isWinner || player.isBingoClaimed) && ' (CLAIMED BINGO!)'}
-                                    </span>
+                <div className="grid grid-cols-1 lg:grid-cols-3 gap-6">
+                    {/* Column 1: Called Numbers */}
+                    <div className="lg:col-span-1">
+                        <div className="bg-white/60 backdrop-blur-sm rounded-2xl shadow-lg border border-sky-100 p-4 sticky top-6">
+                            <h2 className="text-xl font-light text-sky-700 mb-3 border-b pb-2 border-sky-100">ตัวเลขที่ถูกเรียก ({calledNumbers.length})</h2>
+                            <div className="max-h-80 overflow-y-auto pr-2">
+                                <div className="flex flex-wrap gap-2">
+                                    {[...calledNumbers].reverse().map((num, index) => (
+                                        <div 
+                                            key={index}
+                                            className={`w-10 h-10 rounded-full flex items-center justify-center text-sm font-bold ${index === 0 ? 'bg-rose-500 text-white shadow-lg' : 'bg-sky-100 text-sky-700'}`}
+                                        >
+                                            {num}
+                                        </div>
+                                    ))}
                                 </div>
-                            ))}
-                        </div>
-                    </div>
-                </div>
-
-
-                {/* COLUMN 2: My Card & History */}
-                <div className="lg:col-span-2 space-y-6 order-1 lg:order-2">
-                    {/* My Card */}
-                    <div className="bg-white/70 backdrop-blur-sm p-6 rounded-2xl shadow-md border border-sky-100">
-                        <h2 className="text-2xl font-light mb-4 text-center text-slate-700">ตารางของคุณ</h2>
-                        {/* แสดงข้อความเตือนเมื่อเคลมบิงโกแล้ว */}
-                        {isBingoClaimed && winStatus !== 'WIN' && (
-                            <div className="bg-red-100 text-red-700 p-3 rounded-lg text-center font-medium mb-4">
-                                🔒 เกมหยุดแล้ว: มีผู้เล่นอื่นเคลมบิงโก!
                             </div>
-                        )}
-                        <BingoCardDisplay card={myCard} marked={markedCells} />
+                        </div>
                     </div>
 
-                    {/* History */}
-                    <div className="bg-white/70 backdrop-blur-sm p-6 rounded-2xl shadow-md border border-sky-100">
-                        <h3 className="text-xl font-light text-slate-700 mb-3">ประวัติการเรียกเลข: ({calledNumbers.length})</h3>
-                        <div className="flex flex-wrap gap-2 mt-2 max-h-32 overflow-y-auto p-1 border border-slate-200 rounded-lg bg-slate-50">
-                            {calledNumbers.slice().reverse().map((num, index) => ( // แสดงจากล่าสุดก่อน
-                                <span 
-                                    key={index} 
-                                    className={`text-xs font-medium px-2 py-1 rounded-full 
-                                        ${myCard.includes(num) ? 'bg-green-100 text-green-800' : 'bg-blue-100 text-blue-800'}`}
-                                >
-                                    {num}
-                                </span>
-                            ))}
+                    {/* Column 2: Bingo Card */}
+                    <div className="lg:col-span-2">
+                        <div className="bg-white/80 backdrop-blur-sm rounded-2xl shadow-xl border border-indigo-200 p-6">
+                            <h2 className="text-2xl font-bold text-indigo-700 mb-4 text-center">ตารางบิงโกของคุณ</h2>
+                            
+                            {/* Card Grid */}
+                            <div className="grid grid-cols-5 gap-3 border-4 border-indigo-600 rounded-lg p-3 bg-white shadow-2xl max-w-md mx-auto">
+                                {myCard.map((number, index) => (
+                                    <div 
+                                        key={index} 
+                                        id={`cell-${index}`}
+                                        className={getCellClass(index, number)}
+                                        onClick={() => toggleCell(index)}
+                                    >
+                                        {number}
+                                    </div>
+                                ))}
+                            </div>
+
+                            {/* Status */}
+                            <div className="mt-6 text-center">
+                                {error && <p className="text-red-600 font-light mb-2">{error}</p>}
+                                <p className="text-lg font-bold text-slate-700">
+                                    ช่องที่ Mark: {markedCells.size} / {TOTAL_CELLS}
+                                </p>
+                            </div>
+                            
+                            {/* Claim Button */}
+                            <button
+                                onClick={handleClaimBingo}
+                                disabled={isBingoClaimed || !isGameActive}
+                                className={`mt-4 w-full py-3 rounded-lg font-bold transition-all ${
+                                    isBingoClaimed || !isGameActive
+                                    ? 'bg-gray-400 text-gray-600 cursor-not-allowed'
+                                    : checkBingo(markedCells) 
+                                    ? 'bg-yellow-500 text-white hover:bg-yellow-600 animate-pulse'
+                                    : 'bg-indigo-600 text-white hover:bg-indigo-700'
+                                }`}
+                            >
+                                {isBingoClaimed ? '✓ รอการยืนยัน...' : checkBingo(markedCells) ? 'BINGO! ยืนยันการชนะ' : 'ยังไม่บิงโก'}
+                            </button>
                         </div>
                     </div>
                 </div>
+                
+                {/* Additional Info */}
+                 <div className="mt-6 p-4 bg-sky-50 rounded-xl border border-sky-200">
+                     <p className="text-sm text-sky-700">รางวัลสำหรับผู้ชนะ: {roundInfo?.prize_amount.toLocaleString() || 0} บาท</p>
+                 </div>
+
             </div>
+            
+            {/* เพิ่ม CSS สำหรับ Animation */}
+            <style jsx global>{`
+                @keyframes shake {
+                    0%, 100% { transform: translateX(0); }
+                    20%, 60% { transform: translateX(-5px); }
+                    40%, 80% { transform: translateX(5px); }
+                }
+                .animate-shake {
+                    animation: shake 0.4s ease-in-out;
+                }
+            `}</style>
         </div>
     );
 };
 
-// Component Helper: แสดงผลตารางบิงโก
-const BingoCardDisplay = ({ card, marked }) => (
-    <div className="grid grid-cols-5 gap-2 md:gap-3 border-4 border-indigo-500 p-2 rounded-xl bg-white/50 w-full max-w-sm mx-auto aspect-square">
-        {card.map((num, index) => {
-            const isMarked = marked[index];
-            const isFree = num === 'FREE';
-            
-            let cellClass = 'aspect-square flex items-center justify-center rounded text-xl font-bold transition-all duration-300';
-
-            if (isMarked) {
-                cellClass += ' bg-emerald-400 text-white shadow-inner ring-4 ring-emerald-200 scale-105';
-            } else if (isFree) {
-                cellClass += ' bg-gray-300 text-gray-700';
-            } else {
-                cellClass += ' bg-white text-gray-900 border border-gray-200';
-            }
-            
-            return (
-                <div key={index} className={cellClass}>
-                    <span className={`text-xl font-bold ${num === 'FREE' ? 'text-gray-700' : 'text-gray-900'}`}>{num}</span>
-                </div>
-            );
-        })}
-    </div>
-);
-
-// Component Helper: หน้าจอชนะ/แพ้
-const WinLossScreen = ({ status, roundId, winAmount, onConfirm }) => {
+// End Game Modal Component
+const EndGameModal = ({ status, winAmount, onConfirm }) => {
+    const router = useRouter();
     const token = typeof window !== 'undefined' ? localStorage.getItem('bingoToken') : null;
 
     const handleConfirmWin = async () => {
-        if (status === 'WIN') {
-            try {
-                // ส่งคำขอเคลมรางวัลไปยัง Backend
-                await axios.post(CLAIM_WIN_API, { round_id: roundId }, {
-                    headers: { Authorization: `Bearer ${token}` }
-                });
-                alert('ส่งคำขอรับรางวัลสำเร็จ! โปรดรอ Admin ดำเนินการ');
-            } catch (error) {
-                console.error("Error claiming win:", error.response?.data?.message || error);
-                alert(`ไม่สามารถส่งคำขอรับรางวัลได้: ${error.response?.data?.message || 'เกิดข้อผิดพลาดในการเชื่อมต่อ'}`);
-            }
-        }
+        // ในระบบจริง Logic การยืนยันการรับรางวัลจะอยู่ที่นี่
+        // แต่เนื่องจากเราได้ setGameState('END_WIN') ไปแล้ว และ claimWin ถูกเรียกไปแล้ว
+        // เราสามารถถือว่าการยืนยันเสร็จสิ้นได้
+        alert('ระบบได้บันทึกรางวัลของคุณแล้ว คุณจะกลับสู่หน้าหลัก');
         onConfirm(); // ไปหน้าหลักหรือหน้าอื่นต่อ
     };
 
+    const handleConfirmLoss = () => {
+        onConfirm(); // กลับหน้าหลัก
+    };
+
     return (
-        <div className="fixed inset-0 bg-black bg-opacity-70 flex items-center justify-center p-4 z-50">
+        <div className="fixed inset-0 bg-black bg-opacity-80 flex items-center justify-center p-4 z-50">
             <div className="bg-white p-8 rounded-lg text-center shadow-2xl max-w-md w-full">
                 {status === 'WIN' ? (
                     <>
@@ -351,7 +413,7 @@ const WinLossScreen = ({ status, roundId, winAmount, onConfirm }) => {
                         <h2 className="text-4xl font-extrabold text-red-600 mb-4">❌ น่าเสียดาย! ❌</h2>
                         <p className="text-lg mb-6">เกมรอบนี้จบลงแล้ว ขอแสดงความเสียใจด้วย</p>
                         <button 
-                            onClick={onConfirm} 
+                            onClick={handleConfirmLoss} 
                             className="bg-indigo-600 hover:bg-indigo-700 text-white font-bold py-2 px-6 rounded-lg w-full"
                         >
                             กลับหน้าหลัก
@@ -362,6 +424,5 @@ const WinLossScreen = ({ status, roundId, winAmount, onConfirm }) => {
         </div>
     );
 };
-
 
 export default GamePlayPage;

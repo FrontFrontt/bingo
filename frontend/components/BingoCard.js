@@ -51,8 +51,10 @@ const BingoCard = ({ roundId, existingCard, onCardConfirmed }) => {
             const token = localStorage.getItem('bingoToken');
             const cardArray = Array.from(selectedNumbers);
 
+            const API_URL = process.env.NEXT_PUBLIC_API_BASE_URL + '/cards/create';
+
             // ส่งข้อมูลไปยัง Backend API เพื่อจัดเก็บ (U-04 ข้อ 5)
-            await axios.post('http://localhost:4000/api/cards/create', {
+            await axios.post(API_URL, {
                 roundId,
                 cardNumbers: cardArray,
             }, {

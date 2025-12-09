@@ -4,7 +4,7 @@ import { useRouter } from 'next/router';
 import axios from 'axios';
 import Link from 'next/link';
 
-const API_URL = 'http://localhost:4000/api/rounds/deposit';
+const API_URL = process.env.NEXT_PUBLIC_API_BASE_URL + '/rounds/deposit';
 
 const DepositPage = () => {
     const router = useRouter();
@@ -47,7 +47,7 @@ const DepositPage = () => {
         const formData = new FormData();
         formData.append('round_id', roundId);
         formData.append('amount', depositAmount);
-        formData.append('proof_slip', proofSlip);
+        formData.append('proof_image', proofSlip);;
 
         try {
             await axios.post(API_URL, formData, {

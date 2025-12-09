@@ -31,5 +31,4 @@ const upload = multer({
     limits: { fileSize: 5 * 1024 * 1024 } // จำกัดขนาดไฟล์ไม่เกิน 5MB
 });
 
-// Middleware สำหรับการอัปโหลดสลิป
-exports.uploadProof = upload.single('proof_slip'); // 'proof_slip' คือ field name ใน form data
+module.exports = upload; 

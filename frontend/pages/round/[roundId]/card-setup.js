@@ -3,7 +3,7 @@ import React, { useState, useEffect, useMemo } from 'react';
 import { useRouter } from 'next/router';
 import axios from 'axios';
 
-// API สำหรับบันทึก Card (ใช้ Route เดิม)
+// API สำหรับบันทึก Card
 const USER_ROUNDS_API = process.env.NEXT_PUBLIC_API_BASE_URL + '/users/rounds';
 const CARD_SIZE = 5;
 const TOTAL_FIELDS = CARD_SIZE * CARD_SIZE;
@@ -30,236 +30,267 @@ const CardSetupPage = () => {
         const indices = {};
 
         cardValues.forEach((value, index) => {
-            // ไม่นับช่องว่าง ('') และช่อง 'FREE'
-            if (value !== '' && value !== 'FREE') {
-                const num = parseInt(value);
-                // ตรวจสอบว่าเป็นตัวเลขที่ถูกต้องในช่วง 1-99
-                if (!isNaN(num) && num >= 1 && num <= 99) {
-                    counts[num] = (counts[num] || 0) + 1;
-                    if (!indices[num]) indices[num] = [];
-                    indices[num].push(index);
+            if (value && value !== 'FREE' && /^\d+$/.test(value)) {
+                const num = parseInt(value, 10);
+                if (num < 1 || num > 99) return; // ไม่นับเลขมั่ว
 
-                    if (counts[num] > 1) {
-                        duplicates.add(num);
-                    }
+                const key = String(num).padStart(2, '0');
+                counts[key] = (counts[key] || 0) + 1;
+                if (counts[key] > 1) {
+                    duplicates.add(key);
                 }
+                indices[key] = indices[key] || [];
+                indices[key].push(index);
             }
         });
 
-        // รวบรวม index ของทุกตัวเลขที่ซ้ำกัน
-        let result = new Set();
-        duplicates.forEach(num => {
-            indices[num].forEach(index => result.add(index));
+        const result = new Set();
+        duplicates.forEach(key => {
+            indices[key].forEach(index => result.add(index));
         });
-        
-        // กำหนดข้อความ Error หากมีเลขซ้ำ
-        if (result.size > 0) {
-            setError('พบตัวเลขซ้ำกันในตาราง กรุณาแก้ไขก่อนบันทึก');
-        } else if (error === 'พบตัวเลขซ้ำกันในตาราง กรุณาแก้ไขก่อนบันทึก') {
-            setError(''); // ล้าง Error ถ้าแก้ไขแล้ว
+        return result;
+    }, [cardValues]);
+
+    // ** Logic ตรวจสอบเลขมั่ว (เกิน 99 หรือไม่ใช่ตัวเลข) **
+    const invalidIndices = useMemo(() => {
+        const result = new Set();
+        cardValues.forEach((value, index) => {
+            if (value && value !== 'FREE' && !isLocked) {
+                if (!/^\d+$/.test(value) || parseInt(value, 10) < 1 || parseInt(value, 10) > 99) {
+                    result.add(index);
+                }
+            }
+        });
+        return result;
+    }, [cardValues, isLocked]);
+
+    // ** Timer Logic **
+    useEffect(() => {
+        if (isLocked || timer <= 0) return;
+
+        const timerId = setInterval(() => {
+            setTimer(prev => {
+                if (prev <= 1) {
+                    clearInterval(timerId);
+                    // 🚨 เมื่อเวลาหมด ให้ทำการล็อคและส่งค่าทันที
+                    handleLockAndSubmit(true); 
+                    return 0;
+                }
+                return prev - 1;
+            });
+        }, 1000);
+
+        return () => clearInterval(timerId);
+    }, [isLocked, timer]);
+
+    // ** Logic Fetch Card เดิม **
+    useEffect(() => {
+        if (!roundId || !token) {
+            router.push('/login');
+            return;
         }
 
-        return result;
-    }, [cardValues, error]);
-
-    // ** Logic จับเวลาและเปลี่ยนหน้าอัตโนมัติ **
-    useEffect(() => {
-        // ดึง cardId เมื่อ roundId ถูกโหลด (ควรมี API เพื่อดึง card_id ของผู้ใช้ในรอบนั้นๆ)
-        const fetchCardId = async () => {
-            if (!roundId || !token) return;
+        const fetchExistingCard = async () => {
             try {
-                // ดึงข้อมูล Lobby เพื่อให้ได้ card_id และ card_numbers
                 const response = await axios.get(`${USER_ROUNDS_API}/${roundId}/lobby`, {
                     headers: { Authorization: `Bearer ${token}` }
                 });
+                const card = response.data.myCard;
                 
-                // โครงสร้างข้อมูลที่ใช้จาก userController.js: { game, myCard, players }
-                const userCard = response.data.myCard; 
-
-                if (userCard && userCard.card_id) {
-                    setCardId(userCard.card_id);
-                    
-                    // หาก card_numbers ถูกบันทึกแล้ว (ไม่ว่าง/null) ให้อ่านค่ามาใส่ใน state
-                    if (userCard.card_numbers && userCard.card_numbers !== '[]' && userCard.card_numbers !== 'null') {
-                         const savedCard = JSON.parse(userCard.card_numbers);
-                         // เปลี่ยน null กลับเป็น '' สำหรับช่องว่างที่ถูกบันทึก
-                         setCardValues(savedCard.map(v => v === null ? '' : v)); 
-                         setIsLocked(true); // ล็อคทันทีถ้ามีการบันทึกแล้ว
-                    }
+                if (card && card.card_numbers && card.card_numbers !== 'null' && card.card_numbers !== '[]') {
+                    // ถ้ามีตารางอยู่แล้ว ให้ redirect ไป Lobby เลย
+                    router.push(`/round/${roundId}/lobby`); 
+                    return;
                 }
+                
             } catch (err) {
-                console.error("Error fetching card setup data:", err);
-                // จัดการ Error หากไม่พบ Card (อาจยังไม่ได้ลงทะเบียน)
+                // หากดึงข้อมูลไม่ได้ (เช่น ยังไม่ลงทะเบียน) ไม่เป็นไร ให้ไปต่อ
+                console.log('No existing card or registration found, proceeding to setup.');
             }
         };
-
-        fetchCardId();
-
-        // เริ่ม Timer
-        if (timer > 0 && !isLocked) {
-            const timerId = setInterval(() => {
-                setTimer((prevTimer) => prevTimer - 1);
-            }, 1000);
-            return () => clearInterval(timerId);
-        } else if (timer === 0 && !isLocked) {
-            // เมื่อเวลานับถอยหลังหมดลง
-            // eslint-disable-next-line react-hooks/immutability
-            handleLockAndSubmit(true); // บันทึกและล็อคโดยอัตโนมัติ
-        }
-    }, [timer, isLocked, roundId, token]);
+        fetchExistingCard();
+    }, [roundId, token]);
 
 
-    const handleCardChange = (index, value) => {
-        // จำกัดให้เป็นตัวเลข 1-99
-        if (value !== '' && (!/^\d*$/.test(value) || parseInt(value) < 1 || parseInt(value) > 99)) {
-            // หากกรอกค่ามั่ว เช่น ตัวอักษร ให้ปล่อยว่าง
-            if (!/^\d*$/.test(value)) value = '';
-            // ถ้าเป็นตัวเลขนอกช่วงที่กำหนด ก็ปล่อยผ่านให้ Logic ใน handleLockAndSubmit จัดการ
-        }
+    const handleChange = (index, value) => {
+        if (isLocked || index === 12) return; // ห้ามแก้ช่อง FREE
 
         const newValues = [...cardValues];
-        newValues[index] = value;
+        // รับเฉพาะตัวเลข
+        const numericValue = value.replace(/[^0-9]/g, '');
+        
+        // จำกัดความยาว
+        if (numericValue.length <= 2) {
+            newValues[index] = numericValue.padStart(2, '0');
+        } else {
+            newValues[index] = numericValue.substring(0, 2);
+        }
+
         setCardValues(newValues);
+        setError('');
     };
 
-    const handleLockAndSubmit = async (isAutoSubmit = false) => {
+    const handleLockAndSubmit = async (isTimeout = false) => {
         if (isLocked) return;
-        
-        // 1. ตรวจสอบ Card ID
-        if (!cardId) {
-             setError('ไม่พบ ID ตารางบิงโก กรุณาลองโหลดหน้าใหม่');
-             return;
+
+        // 1. ตรวจสอบข้อผิดพลาดร้ายแรง: เลขซ้ำ
+        if (duplicateIndices.size > 0) {
+            setError('พบหมายเลขซ้ำบนตารางบิงโกของคุณ กรุณาแก้ไข');
+            if (isTimeout) alert('เวลาหมด! ระบบไม่สามารถบันทึกตารางได้ เนื่องจากพบหมายเลขซ้ำ');
+            return;
         }
 
-        // 2. เตรียมค่า Card สำหรับบันทึก
-        let cardToSave = [...cardValues];
-        const autoDuplicateIndices = duplicateIndices; 
-        
-        // 3. Logic สำหรับ Auto Submit (หมดเวลา)
-        if (isAutoSubmit) {
-            console.log("Auto submitting card. Filtering invalid values...");
-            
-            // กรองค่าที่ไม่ถูกต้อง/ซ้ำ ให้เป็น null (ว่าง)
-            cardToSave = cardToSave.map((value, index) => {
-                if (value === 'FREE') return 'FREE';
+        setIsLocked(true); // ล็อคเพื่อป้องกันการแก้ไขเพิ่มเติม
 
-                const num = parseInt(value);
-                // ถ้าซ้ำ หรือ ไม่ใช่ตัวเลขที่ถูกต้อง (1-99) หรือเป็นช่องว่าง ให้ล้างเป็น null
-                if (autoDuplicateIndices.has(index) || isNaN(num) || num < 1 || num > 99 || value === '') {
-                    return null; 
+        // 2. จัดการข้อมูลก่อนส่ง: กรองเฉพาะเลขที่ถูกต้อง
+        const cardArrayToSend = cardValues.map((value, index) => {
+            if (index === 12) return 'FREE';
+            
+            if (value) {
+                const num = parseInt(value, 10);
+                // ถ้าเป็นตัวเลขระหว่าง 1-99 ให้ส่งค่าไป
+                if (num >= 1 && num <= 99) {
+                    return String(num).padStart(2, '0');
                 }
-                return value;
-            });
-
-            // ตรวจสอบอีกครั้งว่ายังมีเลขซ้ำเหลืออยู่หรือไม่ (กรณีที่เลขซ้ำยังไม่ถูกล้างหมดจาก Map เดิม)
-            // แต่เนื่องจากเรากรองค่าซ้ำออกหมดแล้ว (จาก autoDuplicateIndices) ส่วนนี้จึงเน้นที่การล้างค่าที่ไม่ถูกต้อง
-        } else {
-             // ถ้าเป็นการบันทึกด้วยตนเอง (Manual Submit) และพบเลขซ้ำ ให้หยุด
-            if (autoDuplicateIndices.size > 0) { 
-                setError('พบตัวเลขซ้ำกันในตาราง กรุณาแก้ไขก่อนบันทึก');
-                return;
             }
+            // ถ้าเป็นช่องว่าง/เลขมั่ว/เกิน 99 ให้ส่งค่า null หรือ string ว่าง
+            return ''; 
+        });
+
+        // 3. ตรวจสอบว่ามีตัวเลขบนตารางหรือไม่
+        const hasNumbers = cardArrayToSend.filter(val => val !== 'FREE' && val !== '').length > 0;
+        if (!hasNumbers) {
+            setError('กรุณากรอกตัวเลขบนตารางบิงโกอย่างน้อยหนึ่งช่อง');
+            setIsLocked(false);
+            return;
         }
-        
-        try {
-            // ทำการบันทึก Card Numbers ไปยัง Backend
-            await axios.put(`${USER_ROUNDS_API}/${roundId}/card/${cardId}`, {
-                // ส่งค่าที่ถูกต้อง ('FREE', 'xx', หรือ null)
-                cardNumbers: JSON.stringify(cardToSave), 
-            }, {
-                headers: { Authorization: `Bearer ${token}` }
-            });
 
-            setIsLocked(true);
-            setError('');
-            
-            if (!isAutoSubmit) {
-                alert('บันทึกตารางบิงโกสำเร็จ!');
-            }
-            // เปลี่ยนหน้าไปยังหน้าเล่นเกมเมื่อบันทึกสำเร็จ (ทั้งอัตโนมัติและด้วยตนเอง)
-            router.push(`/round/${roundId}/play`); 
+        try {
+            // 4. บันทึกตาราง
+            const API_URL = `${USER_ROUNDS_API}/${roundId}/card/create`;
+            const response = await axios.post(
+                API_URL, 
+                { cardNumbers: cardArrayToSend },
+                { headers: { Authorization: `Bearer ${token}` } }
+            );
+
+            setCardId(response.data.cardId);
+            alert('บันทึกตารางบิงโกสำเร็จ! เตรียมเข้าสู่ Lobby');
+            // 5. Redirect ไป Lobby เพื่อรอนับถอยหลัง
+            router.push(`/round/${roundId}/lobby`);
 
         } catch (err) {
-            console.error("Error submitting card:", err);
-            setError(err.response?.data?.message || 'เกิดข้อผิดพลาดในการบันทึกตาราง');
+            console.error('Error submitting card:', err.response?.data?.message || err.message);
+            setError(err.response?.data?.message || 'เกิดข้อผิดพลาดในการบันทึกตาราง กรุณาลองใหม่');
+            setIsLocked(false); // ปลดล็อคให้ผู้ใช้ลองใหม่
         }
+    };
+    
+    // Helper สำหรับแสดงเวลา
+    const formatTime = (seconds) => {
+        const mins = Math.floor(seconds / 60);
+        const secs = seconds % 60;
+        return `${String(mins).padStart(2, '0')}:${String(secs).padStart(2, '0')}`;
     };
 
 
     return (
-        <div className="max-w-4xl mx-auto p-4">
-            <h1 className="text-3xl font-bold mb-4 text-center">จัดเรียงตารางบิงโกของคุณ</h1>
-            <div className={`text-xl font-bold p-3 text-center rounded-lg mb-6 ${timer <= 30 ? 'bg-red-100 text-red-600' : 'bg-indigo-100 text-indigo-600'}`}>
-                เวลาในการจัดเรียง: {timer} วินาที {timer === 0 && `(กำลังเปลี่ยนไปยังหน้าเล่นเกม)`}
-            </div>
-
-            <div className="grid grid-cols-5 gap-2 md:gap-4 border-4 border-indigo-500 p-2 rounded-xl bg-gray-50">
-                {cardValues.map((value, index) => {
-                    const isFreeCell = index === 12;
-                    const isDuplicate = duplicateIndices.has(index); // ** ตรวจสอบเลขซ้ำ **
-                    
-                    // ตรวจสอบว่าเป็นค่าที่ไม่ถูกต้อง (มั่ว/นอกช่วง 1-99)
-                    const isInvalid = value !== '' && value !== 'FREE' && (isNaN(parseInt(value)) || parseInt(value) < 1 || parseInt(value) > 99);
-                    
-                    // กำหนด Style ตามสถานะ
-                    let inputClass = `w-full h-full text-center text-xl font-bold border-2 rounded`;
-                    if (isLocked) {
-                        inputClass += ' bg-gray-100 text-gray-500';
-                    } else if (isDuplicate || isInvalid) { // ** ไฮไลท์สีแดงถ้าซ้ำหรือมั่ว **
-                        inputClass += ' bg-red-100 border-red-500 text-red-700 shake-animation'; 
-                    } else {
-                        inputClass += ' bg-white border-indigo-300';
-                    }
-
-                    return (
-                        <div key={index} className="aspect-square flex items-center justify-center">
-                            {isFreeCell ? (
-                                <div className="w-full h-full flex items-center justify-center bg-gray-300 text-gray-700 font-bold rounded">
-                                    FREE
-                                </div>
-                            ) : (
-                                <input
-                                    type="text" // เปลี่ยนเป็น text เพื่อรับค่าที่ยาวกว่า 2 หลักชั่วคราวแล้วตัด
-                                    maxLength="2" // จำกัดจำนวนตัวอักษร
-                                    value={value}
-                                    onChange={(e) => handleCardChange(index, e.target.value)}
-                                    disabled={isLocked}
-                                    className={inputClass}
-                                    placeholder="?"
-                                />
-                            )}
-                        </div>
-                    );
-                })}
-            </div>
-
-            {/* ** แสดงข้อความ Error สีแดงจาก Logic เลขซ้ำ/มั่ว ** */}
-            {error && (
-                 <p className="text-red-600 font-semibold mt-4 text-center p-2 border border-red-500 bg-red-50 rounded">
-                    {error}
+        <div className="min-h-screen bg-gradient-to-br from-indigo-50 to-purple-50 p-6 md:p-12">
+            <div className="max-w-xl mx-auto">
+                <h1 className="text-3xl font-light text-slate-700 mb-2 text-center">สร้างตารางบิงโก</h1>
+                <p className="text-sm text-slate-500 font-light mb-6 text-center">
+                    รอบเกม ID: {roundId} - กรุณาใส่ตัวเลข 01-99 
                 </p>
-            )}
 
-            <button
-                onClick={() => handleLockAndSubmit(false)}
-                disabled={isLocked || duplicateIndices.size > 0} // ** ปุ่มจะถูกปิดใช้งานถ้ามีเลขซ้ำ **
-                className={`mt-6 py-3 px-8 rounded-lg text-white font-bold transition-all w-full ${isLocked || duplicateIndices.size > 0 ? 'bg-gray-400 cursor-not-allowed' : 'bg-green-600 hover:bg-green-700'}`}
-            >
-                {isLocked ? 'ล็อคและบันทึกแล้ว' : 'ล็อคและเริ่มเล่น'}
-            </button>
-            <p className="text-sm text-gray-500 mt-2 text-center">ช่องว่าง (หรือเลขมั่ว/ซ้ำ) จะถูกบันทึกเป็นช่องเปล่า</p>
+                {/* Timer Bar */}
+                <div className="mb-8">
+                    <div className="flex justify-between items-center mb-1">
+                        <span className="text-sm font-light text-slate-600">
+                            เวลาเหลือ: <span className="font-semibold text-rose-600">{formatTime(timer)}</span>
+                        </span>
+                        <span className={`text-sm font-light ${isLocked ? 'text-green-600' : 'text-slate-500'}`}>
+                            {isLocked ? 'บันทึกแล้ว' : 'กำลังทำตาราง'}
+                        </span>
+                    </div>
+                    <div className="w-full bg-gray-200 rounded-full h-2.5">
+                        <div 
+                            className="bg-rose-500 h-2.5 rounded-full transition-all duration-1000" 
+                            style={{ width: `${(timer / 120) * 100}%` }}
+                        ></div>
+                    </div>
+                </div>
 
-            {/* เพิ่ม CSS สำหรับ Animation */}
-            <style jsx global>{`
-                @keyframes shake {
-                    0%, 100% { transform: translateX(0); }
-                    20%, 60% { transform: translateX(-3px); }
-                    40%, 80% { transform: translateX(3px); }
-                }
-                .shake-animation {
-                    animation: shake 0.5s;
-                }
-            `}</style>
+                {/* Bingo Card Grid */}
+                <div className="grid grid-cols-5 gap-2 border-4 border-indigo-600 rounded-lg p-4 bg-white shadow-xl">
+                    {cardValues.map((value, index) => {
+                        const isFree = index === 12;
+                        const isDuplicate = duplicateIndices.has(index);
+                        const isInvalid = invalidIndices.has(index);
+                        const isProblem = isDuplicate || isInvalid;
+
+                        // กำหนด Class 
+                        let cellClass = 'w-full aspect-square flex items-center justify-center border-2 rounded-lg text-xl font-semibold transition-all duration-100';
+                        if (isFree) {
+                            cellClass += ' bg-indigo-500 text-white cursor-not-allowed';
+                        } else if (isLocked) {
+                             cellClass += ' bg-gray-100 text-gray-700 cursor-not-allowed';
+                        } else if (isProblem) {
+                            cellClass += ' border-red-500 bg-red-100 text-red-700 shake';
+                        } else if (value && value !== 'FREE') {
+                            cellClass += ' border-green-500 bg-green-50 text-green-700';
+                        } else {
+                            cellClass += ' border-gray-300 hover:border-indigo-400';
+                        }
+
+
+                        return (
+                            <div key={index} className={cellClass}>
+                                {isFree ? (
+                                    'FREE'
+                                ) : (
+                                    <input
+                                        type="tel" // ใช้ type="tel" เพื่อให้แป้นพิมพ์มือถือแสดงตัวเลข
+                                        value={value === '00' ? '' : value}
+                                        onChange={(e) => handleChange(index, e.target.value)}
+                                        disabled={isLocked}
+                                        className={`w-full h-full text-center text-xl font-bold rounded-lg focus:outline-none focus:ring-2 bg-transparent ${isProblem ? 'text-red-700' : 'text-gray-800'}`}
+                                        maxLength={2}
+                                        onFocus={(e) => e.target.select()}
+                                    />
+                                )}
+                            </div>
+                        );
+                    })}
+                </div>
+
+                {/* ** แสดงข้อความ Error สีแดงจาก Logic เลขซ้ำ/มั่ว ** */}
+                {error && (
+                     <p className="text-red-600 font-semibold mt-4 text-center p-2 border border-red-500 bg-red-50 rounded">
+                        {error}
+                    </p>
+                )}
+
+                <button
+                    onClick={() => handleLockAndSubmit(false)}
+                    disabled={isLocked || duplicateIndices.size > 0} // ** ปุ่มจะถูกปิดใช้งานถ้ามีเลขซ้ำ **
+                    className={`mt-6 py-3 px-8 rounded-lg text-white font-bold transition-all w-full ${isLocked || duplicateIndices.size > 0 ? 'bg-gray-400 cursor-not-allowed' : 'bg-green-600 hover:bg-green-700'}`}
+                >
+                    {isLocked ? 'ล็อคและบันทึกแล้ว' : 'ล็อคและเริ่มเล่น'}
+                </button>
+                <p className="text-sm text-gray-500 mt-2 text-center">ช่องว่าง (หรือเลขมั่ว/ซ้ำ) จะถูกบันทึกเป็นช่องเปล่า</p>
+
+                {/* เพิ่ม CSS สำหรับ Animation */}
+                <style jsx global>{`
+                    @keyframes shake {
+                        0%, 100% { transform: translateX(0); }
+                        20%, 60% { transform: translateX(-3px); }
+                        40%, 80% { transform: translateX(3px); }
+                    }
+                    .shake {
+                        animation: shake 0.4s;
+                    }
+                `}</style>
+            </div>
         </div>
     );
 };
